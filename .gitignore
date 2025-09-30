@@ -1,65 +1,74 @@
-# Build outputs
-bin/
-obj/
+# .NET build output
+[Bb]in/
+[Oo]bj/
+**/[Bb]in/
+**/[Oo]bj/
 
-# Dotnet user-specific files
-*.user
-*.suo
-*.userosscache
-*.userprefs
-
-# Visual Studio working directories
+# Visual Studio
 .vs/
-
-# Rider / JetBrains IDE
-.idea/
+*.suo
+*.user
+*.userosscache
 *.sln.iml
+*.DotSettings.user
 
-# Logs and diagnostics
-*.log
-
-# NuGet packages
-*.nupkg
-# package caches
-packages/
-.nuget/
-
-# Publish artifacts
-*.publishsettings
-publish/
-
-# Temporary files
-*.tmp
-*.temp
-~$*
-*.bak
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Tooling
-*.rsuser
-*.psess
-*.vsp
-*.vspx
-*.sap
-
-# Auto-generated
-**/GeneratedMSBuildEditorConfig.editorconfig
-**/*.generated.cs
-
-# Coverage
-coverage/
-*.coverage
-*.coveragexml
-
-# Rider caches
+# JetBrains Rider
 .idea/
-.idea_modules/
 *.ipr
 *.iws
 
-# Resharper
+# Build/publish artifacts
+*.appx
+*.appxbundle
+*.build.csdef
+*.g.cs
+*.g.i.cs
+*.nupkg
+*.snupkg
+*.publishsettings
+publish/
+
+# NuGet
+*.nuget.props
+*.nuget.targets
+*.lock.json
+.nuget/
+packages/
+
+# Logs and diagnostics
+*.log
+*.svclog
+*.pidb
+*.scc
+
+# Testing & coverage
+TestResults/
+[Tt]est[Rr]esult*/
+*.coverage
+*.coveragexml
+coverage/
+
+# Generated configuration
+**/GeneratedMSBuildEditorConfig.editorconfig
+
+# IDE caches & tooling
 _ReSharper*/
 *.[Rr]e[Ss]harper
+*.resharper
+*.rsuser
+*.sap
+*.psess
+*.vsp
+*.vspx
+
+# OS / temp files
+*.tmp
+*.temp
+*.bak
+~$*
+.DS_Store
+Thumbs.db
+
+# Rider & VS Code workspace
+.idea_modules/
+.vscode/
