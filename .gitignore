@@ -1,0 +1,65 @@
+# Build outputs
+bin/
+obj/
+
+# Dotnet user-specific files
+*.user
+*.suo
+*.userosscache
+*.userprefs
+
+# Visual Studio working directories
+.vs/
+
+# Rider / JetBrains IDE
+.idea/
+*.sln.iml
+
+# Logs and diagnostics
+*.log
+
+# NuGet packages
+*.nupkg
+# package caches
+packages/
+.nuget/
+
+# Publish artifacts
+*.publishsettings
+publish/
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Tooling
+*.rsuser
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Auto-generated
+**/GeneratedMSBuildEditorConfig.editorconfig
+**/*.generated.cs
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
+
+# Rider caches
+.idea/
+.idea_modules/
+*.ipr
+*.iws
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
