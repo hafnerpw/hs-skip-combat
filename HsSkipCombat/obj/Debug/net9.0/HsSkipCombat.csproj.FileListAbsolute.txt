@@ -1,0 +1,14 @@
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\bin\Debug\net9.0\HsSkipCombat.exe
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\bin\Debug\net9.0\HsSkipCombat.deps.json
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\bin\Debug\net9.0\HsSkipCombat.runtimeconfig.json
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\bin\Debug\net9.0\HsSkipCombat.dll
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\bin\Debug\net9.0\HsSkipCombat.pdb
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.AssemblyInfoInputs.cache
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.AssemblyInfo.cs
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.csproj.CoreCompileInputs.cache
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.dll
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\refint\HsSkipCombat.dll
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.pdb
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\HsSkipCombat.genruntimeconfig.cache
+C:\Users\walter.hafner\WebstormProjects\hs-skip-combat\HsSkipCombat\obj\Debug\net9.0\ref\HsSkipCombat.dll
