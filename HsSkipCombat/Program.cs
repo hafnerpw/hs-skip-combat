@@ -1,11 +1,19 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
+using Windows.Globalization;
+using Windows.Graphics.Imaging;
+using Windows.Media.Ocr;
+using Windows.Storage.Streams;
 
 #nullable enable
 
@@ -22,6 +30,11 @@ namespace HearthstoneBattlegroundsSkip
         private static readonly object ConsoleLock = new();
         private static int _statusBlockStartRow = -1;
         private static int _statusBlockLineCount;
+        private static CancellationTokenSource? _ocrCts;
+        private static Thread? _ocrThread;
+        private static string? _lastOcrText;
+
+        private static bool IsOcrCapturing => _ocrThread is { IsAlive: true };
 
         private static void WithColor(ConsoleColor color, Action action)
         {
@@ -55,6 +68,7 @@ namespace HearthstoneBattlegroundsSkip
             WriteColoredLine(value, color);
         }
 
+        [STAThread]
         private static async Task<int> Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
@@ -63,10 +77,15 @@ namespace HearthstoneBattlegroundsSkip
             EnsureAppFolder();
             LoadConfig();
 
-            AppDomain.CurrentDomain.ProcessExit += (_, __) => SafeReconnect();
+            AppDomain.CurrentDomain.ProcessExit += (_, __) =>
+            {
+                StopOcrCapture();
+                SafeReconnect();
+            };
             Console.CancelKeyPress += (_, e) =>
             {
                 e.Cancel = true;
+                StopOcrCapture();
                 SafeReconnect();
                 Environment.Exit(0);
             };
@@ -138,7 +157,10 @@ namespace HearthstoneBattlegroundsSkip
                 WriteMenuOption("1", "Skip now");
                 WriteMenuOption("2", "Set Hearthstone.exe path");
                 WriteMenuOption("3", "Set disconnected seconds");
-                WriteMenuOption("4", "Exit");
+                WriteMenuOption("4", "Select OCR monitor");
+                WriteMenuOption("5", "Select OCR capture area");
+                WriteMenuOption("6", IsOcrCapturing ? "Stop OCR capture" : "Start OCR capture");
+                WriteMenuOption("7", "Exit");
                 Console.WriteLine();
                 WriteColored("Enter choice: ", ConsoleColor.Cyan);
 
@@ -163,6 +185,19 @@ namespace HearthstoneBattlegroundsSkip
                         break;
 
                     case '4':
+                        PromptForOcrMonitor();
+                        break;
+
+                    case '5':
+                        PromptForOcrArea();
+                        break;
+
+                    case '6':
+                        ToggleOcrCapture();
+                        break;
+
+                    case '7':
+                        StopOcrCapture();
                         SafeReconnect();
                         return;
 
@@ -201,6 +236,53 @@ namespace HearthstoneBattlegroundsSkip
             WriteStatusValue("Enabled", enabled ? "Yes" : "No", enabled ? ConsoleColor.Green : ConsoleColor.DarkGray);
             var isAdmin = IsAdmin();
             WriteStatusValue("Admin?", isAdmin ? "Yes" : "No", isAdmin ? ConsoleColor.Green : ConsoleColor.Red);
+
+            WriteSection("OCR");
+            var screens = Screen.AllScreens;
+            var monitorColor = ConsoleColor.Red;
+            string monitorText;
+            if (screens.Length == 0)
+            {
+                monitorText = "(no monitors detected)";
+            }
+            else if (_cfg.OcrMonitorIndex is int monitorIndex && monitorIndex >= 0 && monitorIndex < screens.Length)
+            {
+                var screen = screens[monitorIndex];
+                var primaryMark = screen.Primary ? " (Primary)" : string.Empty;
+                monitorText = $"{monitorIndex + 1}: {screen.DeviceName} {screen.Bounds.Width}x{screen.Bounds.Height}{primaryMark}";
+                monitorColor = ConsoleColor.Green;
+            }
+            else if (_cfg.OcrMonitorIndex.HasValue)
+            {
+                monitorText = "(invalid selection, please reconfigure)";
+            }
+            else
+            {
+                monitorText = "(not set)";
+            }
+
+            WriteStatusValue("Monitor", monitorText, monitorColor);
+
+            ConsoleColor areaColor;
+            string areaText;
+            if (_cfg.OcrArea is { Width: > 0, Height: > 0 } area)
+            {
+                areaText = $"{area.Width}x{area.Height} @ ({area.X},{area.Y})";
+                areaColor = ConsoleColor.Green;
+            }
+            else if (_cfg.OcrArea != null)
+            {
+                areaText = "(invalid area, please reselect)";
+                areaColor = ConsoleColor.Red;
+            }
+            else
+            {
+                areaText = "(not set)";
+                areaColor = ConsoleColor.Red;
+            }
+
+            WriteStatusValue("Area", areaText, areaColor);
+            WriteStatusValue("Capturing", IsOcrCapturing ? "Yes" : "No", IsOcrCapturing ? ConsoleColor.Green : ConsoleColor.DarkGray);
 
             return Console.CursorTop - start;
         }
@@ -451,6 +533,514 @@ namespace HearthstoneBattlegroundsSkip
             }
         }
 
+        // === OCR CAPTURE ===
+        private static void PromptForOcrMonitor()
+        {
+            Console.WriteLine();
+            var screens = Screen.AllScreens;
+            if (screens.Length == 0)
+            {
+                WriteColoredLine("No monitors detected for OCR capture.", ConsoleColor.Red);
+                Pause();
+                return;
+            }
+
+            WriteColoredLine("Available monitors:", ConsoleColor.Cyan);
+            for (var i = 0; i < screens.Length; i++)
+            {
+                var screen = screens[i];
+                var primaryMark = screen.Primary ? " (Primary)" : string.Empty;
+                WriteColoredLine($"  {i + 1}) {screen.DeviceName} {screen.Bounds.Width}x{screen.Bounds.Height}{primaryMark}", ConsoleColor.White);
+            }
+
+            WriteColored("Enter monitor number (blank to cancel): ", ConsoleColor.Cyan);
+            var input = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(input))
+            {
+                WriteColoredLine("Cancelled. Keeping current monitor.", ConsoleColor.Yellow);
+                Pause();
+                return;
+            }
+
+            if (!int.TryParse(input, out var choice) || choice < 1 || choice > screens.Length)
+            {
+                WriteColoredLine("Invalid monitor selection.", ConsoleColor.Red);
+                Pause();
+                return;
+            }
+
+            _cfg.OcrMonitorIndex = choice - 1;
+            SaveConfig();
+            RefreshStatusBlock();
+            WriteColoredLine("Saved monitor selection.", ConsoleColor.Green);
+            Pause();
+        }
+
+        private static void PromptForOcrArea()
+        {
+            Console.WriteLine();
+            if (!TryGetConfiguredScreen(out var screen, showError: true))
+            {
+                Pause();
+                return;
+            }
+
+            WriteColoredLine("An overlay will appear on the selected monitor.", ConsoleColor.Cyan);
+            WriteColoredLine("Click and drag to choose the area. Press Esc or right-click to cancel.", ConsoleColor.Cyan);
+
+            try
+            {
+                var selection = CaptureAreaSelector.SelectArea(screen);
+                if (selection is null)
+                {
+                    WriteColoredLine("Selection cancelled.", ConsoleColor.Yellow);
+                    Pause();
+                    return;
+                }
+
+                _cfg.OcrArea = CaptureAreaConfig.FromRectangle(selection.Value);
+                SaveConfig();
+                RefreshStatusBlock();
+                WriteColoredLine($"Saved area {selection.Value.Width}x{selection.Value.Height} @ ({selection.Value.X},{selection.Value.Y}).", ConsoleColor.Green);
+            }
+            catch (Exception ex)
+            {
+                WriteColoredLine($"Failed to capture area: {ex.Message}", ConsoleColor.Red);
+            }
+
+            Pause();
+        }
+
+        private static void ToggleOcrCapture()
+        {
+            Console.WriteLine();
+            if (IsOcrCapturing)
+            {
+                StopOcrCapture();
+                RefreshStatusBlock();
+                WriteColoredLine("OCR capture stopped.", ConsoleColor.Yellow);
+                Pause();
+                return;
+            }
+
+            if (!TryGetConfiguredScreen(out var screen, showError: true) || !TryGetOcrArea(screen, out var area, showError: true))
+            {
+                Pause();
+                return;
+            }
+
+            StartOcrCapture(area);
+            RefreshStatusBlock();
+            WriteColoredLine("OCR capture started. Use the menu to stop.", ConsoleColor.Green);
+            Pause();
+        }
+
+        private static bool TryGetConfiguredScreen(out Screen screen, bool showError)
+        {
+            var screens = Screen.AllScreens;
+            if (screens.Length == 0)
+            {
+                screen = Screen.PrimaryScreen!;
+                if (showError)
+                    WriteColoredLine("No monitors detected.", ConsoleColor.Red);
+                return false;
+            }
+
+            if (_cfg.OcrMonitorIndex is int index && index >= 0 && index < screens.Length)
+            {
+                screen = screens[index];
+                return true;
+            }
+
+            screen = Screen.PrimaryScreen ?? screens[0];
+            if (showError)
+                WriteColoredLine("OCR monitor not configured. Please select a monitor first.", ConsoleColor.Red);
+            return false;
+        }
+
+        private static bool TryGetOcrArea(Screen screen, out Rectangle area, bool showError)
+        {
+            if (_cfg.OcrArea is { Width: > 0, Height: > 0 } stored)
+            {
+                var rect = stored.ToRectangle();
+                if (screen.Bounds.Contains(rect))
+                {
+                    area = rect;
+                    return true;
+                }
+
+                if (showError)
+                    WriteColoredLine("The configured area no longer fits on the selected monitor. Please reselect it.", ConsoleColor.Red);
+            }
+            else if (showError)
+            {
+                WriteColoredLine("OCR capture area not configured.", ConsoleColor.Red);
+            }
+
+            area = default;
+            return false;
+        }
+
+        private static void StartOcrCapture(Rectangle area)
+        {
+            StopOcrCapture();
+            _ocrCts = new CancellationTokenSource();
+            _lastOcrText = null;
+
+            var token = _ocrCts.Token;
+            var thread = new Thread(() => RunOcrCaptureThread(area, token))
+            {
+                IsBackground = true,
+                Name = "OCR Capture"
+            };
+            thread.SetApartmentState(ApartmentState.STA);
+            _ocrThread = thread;
+            thread.Start();
+        }
+
+        private static void StopOcrCapture()
+        {
+            var cts = Interlocked.Exchange(ref _ocrCts, null);
+            if (cts == null)
+                return;
+
+            try
+            {
+                cts.Cancel();
+                if (_ocrThread is { IsAlive: true } thread)
+                {
+                    if (!thread.Join(TimeSpan.FromSeconds(5)))
+                    {
+                        thread.Interrupt();
+                        thread.Join(TimeSpan.FromSeconds(2));
+                    }
+                }
+            }
+            catch
+            {
+                // ignore cleanup errors
+            }
+            finally
+            {
+                _ocrThread = null;
+                cts.Dispose();
+            }
+        }
+
+        private static void RunOcrCaptureThread(Rectangle area, CancellationToken token)
+        {
+            CaptureIndicatorOverlay? overlay = null;
+            try
+            {
+                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+
+                overlay = new CaptureIndicatorOverlay(area);
+                overlay.Show();
+                Application.DoEvents();
+
+                var engine = CreateOcrEngine();
+                if (engine == null)
+                {
+                    return;
+                }
+
+                while (!token.IsCancellationRequested)
+                {
+                    Application.DoEvents();
+                    string? text = null;
+                    try
+                    {
+                        text = CaptureAndRecognize(area, engine);
+                    }
+                    catch (Exception ex)
+                    {
+                        lock (ConsoleLock)
+                        {
+                            WriteColoredLine($"OCR capture error: {ex.Message}", ConsoleColor.Red);
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(text) && !string.Equals(text, _lastOcrText, StringComparison.Ordinal))
+                    {
+                        _lastOcrText = text;
+                        lock (ConsoleLock)
+                        {
+                            Console.WriteLine();
+                            WriteColoredLine($"[OCR {DateTime.Now:HH:mm:ss}]", ConsoleColor.Magenta);
+                            Console.WriteLine(text);
+                            Console.WriteLine();
+                        }
+                    }
+                    for (var i = 0; i < 10 && !token.IsCancellationRequested; i++)
+                    {
+                        Application.DoEvents();
+                        Thread.Sleep(100);
+                    }
+                }
+            }
+            catch (ThreadInterruptedException)
+            {
+                // graceful shutdown
+            }
+            catch (Exception ex)
+            {
+                lock (ConsoleLock)
+                {
+                    WriteColoredLine($"OCR capture stopped: {ex.Message}", ConsoleColor.Red);
+                }
+            }
+            finally
+            {
+                overlay?.Close();
+                overlay?.Dispose();
+                if (ReferenceEquals(_ocrThread, Thread.CurrentThread))
+                {
+                    _ocrThread = null;
+                    var cts = Interlocked.Exchange(ref _ocrCts, null);
+                    cts?.Dispose();
+                }
+            }
+        }
+
+        private static OcrEngine? CreateOcrEngine()
+        {
+            try
+            {
+                var engine = OcrEngine.TryCreateFromUserProfileLanguages();
+                if (engine != null)
+                    return engine;
+
+                var fallback = new Language("en");
+                return OcrEngine.TryCreateFromLanguage(fallback);
+            }
+            catch (Exception ex)
+            {
+                lock (ConsoleLock)
+                {
+                    WriteColoredLine($"Failed to initialize OCR engine: {ex.Message}", ConsoleColor.Red);
+                }
+                return null;
+            }
+        }
+
+        private static string? CaptureAndRecognize(Rectangle area, OcrEngine engine)
+        {
+            using var bitmap = new Bitmap(area.Width, area.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bitmap))
+            {
+                g.CopyFromScreen(area.Location, Point.Empty, area.Size, CopyPixelOperation.SourceCopy);
+            }
+
+            using var memory = new MemoryStream();
+            bitmap.Save(memory, ImageFormat.Png);
+            memory.Position = 0;
+
+            using var stream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(stream))
+            {
+                writer.WriteBytes(memory.ToArray());
+                writer.StoreAsync().AsTask().GetAwaiter().GetResult();
+                writer.DetachStream();
+            }
+
+            stream.Seek(0);
+            var decoder = BitmapDecoder.CreateAsync(stream).AsTask().GetAwaiter().GetResult();
+            using var softwareBitmap = decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied).AsTask().GetAwaiter().GetResult();
+            var result = engine.RecognizeAsync(softwareBitmap).AsTask().GetAwaiter().GetResult();
+            var text = result.Text?.Trim();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+
+        private static class CaptureAreaSelector
+        {
+            public static Rectangle? SelectArea(Screen screen)
+            {
+                var tcs = new TaskCompletionSource<Rectangle?>();
+                var thread = new Thread(() => RunSelection(screen, tcs))
+                {
+                    IsBackground = true,
+                    Name = "OCR Area Selector"
+                };
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+
+                try
+                {
+                    var result = tcs.Task.GetAwaiter().GetResult();
+                    thread.Join();
+                    return result;
+                }
+                catch
+                {
+                    thread.Join();
+                    throw;
+                }
+            }
+
+            private static void RunSelection(Screen screen, TaskCompletionSource<Rectangle?> completion)
+            {
+                try
+                {
+                    Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+
+                    using var overlay = new SelectionOverlay(screen.Bounds);
+                    overlay.FormClosed += (_, __) => completion.TrySetResult(overlay.SelectedArea);
+                    Application.Run(overlay);
+                }
+                catch (Exception ex)
+                {
+                    completion.TrySetException(ex);
+                }
+            }
+        }
+
+        private sealed class SelectionOverlay : Form
+        {
+            private readonly Rectangle _screenBounds;
+            private Point _startPoint;
+            private Rectangle? _currentSelection;
+            private bool _dragging;
+
+            public SelectionOverlay(Rectangle bounds)
+            {
+                _screenBounds = bounds;
+                DoubleBuffered = true;
+                FormBorderStyle = FormBorderStyle.None;
+                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;
+                TopMost = true;
+                Bounds = bounds;
+                Location = bounds.Location;
+                Cursor = Cursors.Cross;
+                BackColor = Color.Black;
+                Opacity = 0.2;
+                KeyPreview = true;
+            }
+
+            public Rectangle? SelectedArea { get; private set; }
+
+            protected override void OnKeyDown(KeyEventArgs e)
+            {
+                base.OnKeyDown(e);
+                if (e.KeyCode == Keys.Escape)
+                {
+                    SelectedArea = null;
+                    Close();
+                }
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                if (e.Button != MouseButtons.Left)
+                {
+                    if (e.Button == MouseButtons.Right)
+                    {
+                        SelectedArea = null;
+                        Close();
+                    }
+                    return;
+                }
+
+                _dragging = true;
+                _startPoint = e.Location;
+                _currentSelection = new Rectangle(e.Location, Size.Empty);
+                Invalidate();
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                if (!_dragging)
+                    return;
+
+                _currentSelection = Normalize(_startPoint, e.Location);
+                Invalidate();
+            }
+
+            protected override void OnMouseUp(MouseEventArgs e)
+            {
+                base.OnMouseUp(e);
+                if (!_dragging || e.Button != MouseButtons.Left)
+                    return;
+
+                _dragging = false;
+                _currentSelection = Normalize(_startPoint, e.Location);
+                if (_currentSelection is { Width: > 0, Height: > 0 } selection)
+                {
+                    SelectedArea = new Rectangle(selection.X + _screenBounds.X, selection.Y + _screenBounds.Y, selection.Width, selection.Height);
+                    Close();
+                }
+                else
+                {
+                    SelectedArea = null;
+                    Close();
+                }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                if (_currentSelection is not { Width: > 0, Height: > 0 } selection)
+                    return;
+
+                using var fillBrush = new SolidBrush(Color.FromArgb(80, Color.DeepSkyBlue));
+                using var pen = new Pen(Color.Cyan, 2);
+                e.Graphics.FillRectangle(fillBrush, selection);
+                e.Graphics.DrawRectangle(pen, selection);
+            }
+
+            private static Rectangle Normalize(Point start, Point end)
+            {
+                var x = Math.Min(start.X, end.X);
+                var y = Math.Min(start.Y, end.Y);
+                var width = Math.Abs(start.X - end.X);
+                var height = Math.Abs(start.Y - end.Y);
+                return new Rectangle(x, y, width, height);
+            }
+        }
+
+        private sealed class CaptureIndicatorOverlay : Form
+        {
+            public CaptureIndicatorOverlay(Rectangle bounds)
+            {
+                DoubleBuffered = true;
+                FormBorderStyle = FormBorderStyle.None;
+                StartPosition = FormStartPosition.Manual;
+                ShowInTaskbar = false;
+                TopMost = true;
+                Bounds = bounds;
+                Location = bounds.Location;
+                BackColor = Color.Lime;
+                TransparencyKey = Color.Lime;
+            }
+
+            protected override CreateParams CreateParams
+            {
+                get
+                {
+                    var cp = base.CreateParams;
+                    cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+                    cp.ExStyle |= 0x00080000; // WS_EX_LAYERED
+                    cp.ExStyle |= 0x00000020; // WS_EX_TRANSPARENT
+                    return cp;
+                }
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                base.OnPaint(e);
+                using var pen = new Pen(Color.Red, 3);
+                var rect = new Rectangle(0, 0, Width - 1, Height - 1);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.DrawRectangle(pen, rect);
+            }
+        }
+
         // === FIREWALL RULES ===
         private static async Task EnsureRuleExistsAsync()
         {
@@ -610,8 +1200,27 @@ namespace HearthstoneBattlegroundsSkip
 
         [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
         [JsonSerializable(typeof(Config))]
+        [JsonSerializable(typeof(CaptureAreaConfig))]
         private partial class ConfigJsonContext : JsonSerializerContext
         {
+        }
+
+        private sealed class CaptureAreaConfig
+        {
+            public int X { get; set; }
+            public int Y { get; set; }
+            public int Width { get; set; }
+            public int Height { get; set; }
+
+            public Rectangle ToRectangle() => new(X, Y, Width, Height);
+
+            public static CaptureAreaConfig FromRectangle(Rectangle rect) => new()
+            {
+                X = rect.X,
+                Y = rect.Y,
+                Width = rect.Width,
+                Height = rect.Height
+            };
         }
 
         // === CONFIG MODEL ===
@@ -620,6 +1229,8 @@ namespace HearthstoneBattlegroundsSkip
             public string OutboundRuleName { get; set; } = "HS Connection Blocker";
             public string? HearthstonePath { get; set; } = null;
             public int DisconnectedSeconds { get; set; } = 4;
+            public int? OcrMonitorIndex { get; set; }
+            public CaptureAreaConfig? OcrArea { get; set; }
 
             public static Config Default() => new();
         }
